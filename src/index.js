@@ -16,7 +16,7 @@ const env = {
   checkEveryMin: Number(process.env.CHECK_EVERY_MIN || 30),
   resendEverySec: Number(process.env.RESEND_EVERY_SEC || 30),
   maxAttempts: Number(process.env.MAX_ATTEMPTS || 480),
-  cooldownHours: Number(process.env.COOLDOWN_HOURS || 3),
+  cooldownHours: Number(process.env.COOLDOWN_HOURS || 1),
   location: process.env.LOCATION_NAME || 'باتنة',
 };
 
@@ -27,10 +27,11 @@ function log(...args) {
 }
 
 function loadState() {
+  const defaults = { offset: 0, armed: true, clearSince: null };
   try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    return { ...defaults, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
   } catch {
-    return { offset: 0, lastAlertAt: 0 };
+    return defaults;
   }
 }
 
@@ -96,7 +97,7 @@ async function runAlert(state, risk) {
     if (await waitForAck(state, env.resendEverySec)) {
       log('alert acknowledged');
       await sendMessage(env.token, env.chatId, '✅ تم استلام التنبيه.');
-      state.lastAlertAt = Date.now();
+      state.armed = false;
       saveState(state);
       return;
     }
@@ -104,7 +105,7 @@ async function runAlert(state, risk) {
 
   log('alert max attempts reached without ack');
   await sendMessage(env.token, env.chatId, '⚠️ انتهت محاولات التنبيه بدون تأكيد.');
-  state.lastAlertAt = Date.now();
+  state.armed = false;
   saveState(state);
 }
 
@@ -118,10 +119,21 @@ async function checkForecast(state) {
   });
   log(`forecast peak ${risk.peakProbability}% at ${risk.peakTime}`);
 
-  const cooldownMs = env.cooldownHours * 3600 * 1000;
-  const inCooldown = Date.now() - state.lastAlertAt < cooldownMs;
+  if (!risk.risky) {
+    // Forecast is clear: start the quiet period, then re-arm after it.
+    if (state.clearSince === null) state.clearSince = Date.now();
+    if (!state.armed && Date.now() - state.clearSince >= env.cooldownHours * 3600 * 1000) {
+      state.armed = true;
+      log('alert re-armed after quiet period');
+    }
+    saveState(state);
+    return;
+  }
 
-  if (risk.risky && !inCooldown) {
+  // Rain is forecast again, so any new quiet period starts over.
+  state.clearSince = null;
+  saveState(state);
+  if (state.armed) {
     await runAlert(state, risk);
   }
 }
