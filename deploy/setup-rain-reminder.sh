@@ -18,7 +18,12 @@ npm ci --omit=dev
 if [ ! -f .env ]; then
   cp .env.example .env
   chmod 600 .env
-  echo "Created .env. Fill TELEGRAM_BOT_TOKEN in it."
+fi
+
+if ! grep -q '^TELEGRAM_BOT_TOKEN=.\+' .env; then
+  echo "TELEGRAM_BOT_TOKEN is empty in $APP_DIR/.env."
+  echo "Fill it, then run this script again."
+  exit 0
 fi
 
 if pm2 describe "$APP_NAME" > /dev/null 2>&1; then
